@@ -1,1 +1,2 @@
 # Trilateration-with-error-estimation
+True-range multilateration is a method to determine the location of a movable vehicle or stationary point in space using multiple ranges between the vehicle/point and multiple spatially-separated known locations. It is surveying in which the lengths of the sides of a triangle are measured, usually by electronic means, and, from this information, angles are computed.
