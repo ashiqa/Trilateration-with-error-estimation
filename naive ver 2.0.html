@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<body style="background: #eee">
+  Error: <output id="error"></output>
+  <br/>
+<canvas id="canvas" width="512" height="512"></canvas>
+</body>
+<script type="text/javascript">
+const BEACON_PING_FREQ = 2000;  // ms
+const FIELD_SIZE = 1024;             // meters?
+const BEACON_PING_FUZZ = 0.01;
+const BEACON_PING_RES  = 5;   // 1=1ms, 1000=1s
+
+const BEACONS = [
+  {id: 1, x:10, y:FIELD_SIZE/3},
+  {id: 2, x:FIELD_SIZE/3, y:0},
+  {id: 3, x:FIELD_SIZE-10, y:FIELD_SIZE/3},
+   ];
+
+// How many triangles to use for each estimate
+const NUM_EST_TRI = (BEACONS.length-1)&0xfe; 
+
+Array.prototype.shuffle = function() {       // shuffling contents of object 
+    for (let i = this.length; i; i--) {
+        let j = Math.floor(Math.random() * i);
+        [this[i - 1], this[j]] = [this[j], this[i - 1]];
+    }
+    return this;
+};
+
+Array.prototype.random = function() {                   //random picking
+    let i = Math.floor(Math.random()*(this.length));
+    return this[i];
+};
+
+
+
+class Beacon
+{
+  constructor(id,x,y) {
+    this._id = id;
+    this._x = x;
+    this._y = y;
+    this._strength = 1;
+    this._last_ping = Date.now() - Math.random()*BEACON_PING_FREQ;
+  }
+
+  ping(x, y) {
+    let dist = Math.sqrt((x-this.X)*(x-this.X) + (y-this.Y)*(y-this.Y));
+//    dist *= (1+((Math.random()-0.5)/20));
+    let r = 1+((Math.random()-0.5)*BEACON_PING_FUZZ);
+    this._strength = Math.floor(dist / BEACON_PING_RES) * BEACON_PING_RES * r;
+    this._last_ping = Date.now();
+    return this._strength;
+  }
+
+  get Strength() {
+    return this._strength;
+  }
+
+  get LastPing() {
+    return this._last_ping;
+  }
+  
+  get Id() {
+    return this._id;
+  }
+
+  get X() {
+    return this._x;
+  }
+  
+  get Y() {
+    return this._y;
+  }
+}
+
+
+class Rover
+{
+  constructor(x,y) {
+    this._x = x;
+    this._y = y;
+    this._dx = (Math.random()>0.5?0.5:-0.5);
+    this._dy = (Math.random()>0.5?0.5:-0.5);
+    this._estX = x;
+    this._estY = y;
+    this._beacons = [];
+  }
+
+  add_beacon(beacon) {
+    this._beacons.push(beacon);
+    return beacon;
+  }
+
+  estimate_position(times) {
+    let now = Date.now();
+    let pow = (x,y) => {return Math.pow(x,y);}
+    // Trilateration from three beacons at a time
+    let beacons = this._beacons.sort((a,b) => { return b.LastPing-a.LastPing});
+    let nbeacons = beacons.length;
+    let nestX = this._estX;//FIELD_SIZE/2;//;
+    let nestY = this._estY;//FIELD_SIZE/2;
+    
+    for(let i=0; i < times; i++) {
+       let ag1 = 1.0-Math.min(1.0, ((now-beacons[(i+0) % nbeacons].LastPing)/BEACON_PING_FREQ));
+       let ag2 = 1.0-Math.min(1.0, ((now-beacons[(i+1) % nbeacons].LastPing)/BEACON_PING_FREQ));
+       let ag3 = 1.0-Math.min(1.0, ((now-beacons[(i+2) % nbeacons].LastPing)/BEACON_PING_FREQ));
+      let ag =  1-(1/(1+i));//ag1+ag2+ag3)/(BEACON_PING_FREQ*3);
+
+      let xa = beacons[(i+0) % nbeacons].X;
+      let ya = beacons[(i+0) % nbeacons].Y;
+      let ra = beacons[(i+0) % nbeacons].Strength;
+
+      let xb = beacons[(i+1) % nbeacons].X;
+      let yb = beacons[(i+1) % nbeacons].Y;
+      let rb = beacons[(i+1) % nbeacons].Strength;
+      
+      let xc = beacons[(i+2) % nbeacons].X;
+      let yc = beacons[(i+2) % nbeacons].Y;
+      let rc = beacons[(i+2) % nbeacons].Strength;
+
+      ctx.beginPath();
+      ctx.moveTo(xa,ya);
+      ctx.lineTo(xb,yb);
+      ctx.lineTo(xc,yc);
+      ctx.lineTo(xa,ya);
+      ctx.stroke();
+
+      let S = (pow(xc, 2.0) - pow(xb, 2.0) + 
+           		pow(yc, 2.0) - pow(yb, 2.) + 
+           pow(rb, 2.0) - pow(rc, 2.)) / 2.0;
+
+      let T = (pow(xa, 2.0) - pow(xb, 2.0) + 
+           pow(ya, 2.0) - pow(yb, 2.0) + 
+           pow(rb, 2.0) - pow(ra, 2.0)) / 2.0;
+      if(S === Infinity || S === -Infinity) {
+        continue;
+      }
+      if(T === Infinity || T === -Infinity) {
+        continue;
+      }
+      let y = ((T * (xb - xc)) - (S * (xb - xa))) / (((ya - yb) * (xb - xc)) - ((yc - yb) * (xb - xa)));
+      let x = ((y * (ya - yb)) - T) / (xb - xa);
+      // now x, y  is the estimated receiver position
+      if(!isNaN(x) && !isNaN(y) && x !== Infinity && x !== -Infinity && y !== Infinity && y !== -Infinity) {
+//        console.log(this._estX, this._estY,x,y);
+        nestX = (nestX*(ag) + x*(1-ag));
+        nestY = (nestY*(ag) + y*(1-ag));
+      }
+    }
+    this._estX = (this._estX*2+nestX)/3;
+    this._estY = (this._estY*2+nestY)/3;
+  }
+  
+  move() {
+    // this._estX = (this._x + this._estX)/2;
+    // this._estY = (this._y + this._estY)/2;
+    for(let i = 0; i < this._beacons.length; i++) {
+      if(Math.random() > BEACON_PING_FUZZ) {
+        if(Date.now()-this._beacons[i].LastPing >= BEACON_PING_FREQ) {
+      //      console.log('ping %d', beacons[0].Id);
+            this._beacons[i].ping(this.X, this.Y);
+          }
+      }
+    }
+    this._x += this._dx;
+    this._y += this._dy;
+    if(this._x < 0 || this._x > FIELD_SIZE-10) {
+      this._x -= this._dx;
+      this._dx = -this._dx;
+    }
+    if(this._y < 0 || this._y > FIELD_SIZE-10) {
+      this._y -= this._dy;
+      this._dy = -this._dy;
+    }
+  }
+
+  get X() {
+    return this._x;
+  }
+
+  get Y() {
+    return this._y;
+  }
+
+  get EstX() {
+    return this._estX;
+  }
+
+  get EstY() {
+    return this._estY;
+  }
+}
+
+
+window.onload = function() {
+  var canvas = document.getElementById('canvas');
+  canvas.width = FIELD_SIZE;
+  canvas.height = FIELD_SIZE;
+  window.ctx = canvas.getContext('2d');
+  ctx.fillStyle="#dde";
+  ctx.strokeStyle="red";
+  ctx.lineWidth = 1;
+  let rover = new Rover(FIELD_SIZE/2, FIELD_SIZE/2);  
+  let beacons = BEACONS.map(bd => {
+    let bc = new Beacon(bd.id, bd.x,bd.y);
+    return rover.add_beacon(bc);
+  });
+
+  function tick() {
+    ctx.beginPath();
+    ctx.fillStyle="#dde";
+    ctx.fillRect(0,0, canvas.width, canvas.height);
+    beacons.forEach(function(beacon) {
+      ctx.fillStyle="rgba(" + Math.floor((255-(Date.now()-beacon.LastPing)/10)) + ",0,0,1)";
+      ctx.beginPath();
+      ctx.rect(beacon.X+0.5-5, beacon.Y+0.5-5, 10, 10);
+      ctx.fill();
+    });
+    rover.move();
+    rover.estimate_position(NUM_EST_TRI);
+    ctx.strokeStyle="green";
+    ctx.beginPath();
+    ctx.rect(rover.X+0.5-5, rover.Y+0.5-5, 10, 10);
+    ctx.stroke();
+    
+    let dx = (rover.EstX - rover.X);
+    let dy = (rover.EstY - rover.Y);
+    let err = Math.sqrt(dx*dx + dy*dy);
+    
+    ctx.strokeStyle="black";
+    ctx.beginPath();
+    ctx.rect(rover.EstX+0.5-(err/2), rover.EstY+0.5-(err/2), err, err);
+    ctx.stroke();
+
+    document.getElementById('error').value = Math.floor(err*1000)/1000;
+  }
+  setInterval(tick, 100);  
+};
+</script>
+</html>
